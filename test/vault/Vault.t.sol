@@ -553,4 +553,36 @@ contract VaultTest is Test {
         vm.expectRevert("Winning token is not supported");
         vault.settleVault(swapData, address(0xDEAD), epochId);
     }
+
+    function testTransferOwnership_Success() public {
+        address newOwner = address(123);
+        
+        vm.prank(defaultAdmin);
+        vault.transferOwnership(newOwner);
+        
+        // Verify new owner has all required roles
+        assertTrue(vault.hasRole(vault.DEFAULT_ADMIN_ROLE(), newOwner));
+        assertTrue(vault.hasRole(vault.OWNER_ROLE(), newOwner));
+        assertTrue(vault.hasRole(vault.EPOCH_CONTROLLER_ROLE(), newOwner));
+        
+        // Verify old admin lost all roles
+        assertFalse(vault.hasRole(vault.DEFAULT_ADMIN_ROLE(), defaultAdmin));
+        assertFalse(vault.hasRole(vault.OWNER_ROLE(), defaultAdmin));
+        assertFalse(vault.hasRole(vault.EPOCH_CONTROLLER_ROLE(), defaultAdmin));
+    }
+
+    function testTransferOwnership_NotAdmin() public {
+        address newOwner = address(123);
+        address nonAdmin = address(456);
+        
+        vm.prank(nonAdmin);
+        vm.expectRevert();
+        vault.transferOwnership(newOwner);
+    }
+
+    function testTransferOwnership_ZeroAddress() public {
+        vm.prank(defaultAdmin);
+        vm.expectRevert("New owner cannot be zero address");
+        vault.transferOwnership(address(0));
+    }
 }

@@ -14,9 +14,11 @@ contract DeployRugRumble is Script {
     uint256 deployerPrivateKey;
     address deployerAddress;
     address protocol;
-    address owner;
+    address deploymentOwner;
+    address finalOwner;
     address uniswapV3Router;
     bool isTestnet;
+    bool forceNewDeployment;
     address[] initialSupportedTokens;
 
     // WETH on Base mainnet
@@ -27,9 +29,14 @@ contract DeployRugRumble is Script {
         deployerPrivateKey = vm.envUint("PRIVATE_KEY");
         deployerAddress = vm.addr(deployerPrivateKey);
         protocol = vm.envAddress("PROTOCOL_ADDRESS");
-        owner = vm.envAddress("OWNER_ADDRESS");
+        deploymentOwner = deployerAddress; // Use deployer as initial owner
+        finalOwner = vm.envAddress("FINAL_OWNER_ADDRESS");
         uniswapV3Router = vm.envAddress("UNISWAP_V3_ROUTER");
         isTestnet = vm.envBool("IS_TESTNET");
+        forceNewDeployment = vm.envBool("FORCE_NEW_DEPLOYMENT");
+
+        console.log("Deployer address:", deployerAddress);
+        console.log("Final owner address:", finalOwner);
 
         vm.startBroadcast(deployerPrivateKey);
 
@@ -58,46 +65,93 @@ contract DeployRugRumble is Script {
         initialSupportedTokens.push(brettAddress);
         initialSupportedTokens.push(toshiAddress);
 
-        // Deploy contracts
+        // Deploy or get existing contracts
         address dexAdapter = getOrDeployUniswapV3Adapter();
         address rugRumble = getOrDeployRugRumble();
         address vault = getOrDeployVault(rugRumble);
 
-        // Update adapters for multi-hop routes via WETH
-        // Set adapters for BRETT <-> WETH
-        RugRumble(rugRumble).setDexAdapter(
-            brettAddress,
-            wethAddress,
-            dexAdapter
-        );
-        RugRumble(rugRumble).setDexAdapter(
-            wethAddress,
-            brettAddress,
-            dexAdapter
-        );
+        // Only set DEX adapters if we're deploying new contracts or we're the owner
+        bool canSetRugRumble = RugRumble(rugRumble).owner() == deployerAddress;
+        bool canSetVault = Vault(vault).hasRole(Vault(vault).OWNER_ROLE(), deployerAddress);
+        
+        console.log("RugRumble owner:", RugRumble(rugRumble).owner());
+        console.log("Can set RugRumble:", canSetRugRumble);
+        console.log("Can set Vault:", canSetVault);
+        
+        bool canSetAdapters = canSetRugRumble && canSetVault;
 
-        Vault(vault).setDexAdapter(brettAddress, wethAddress, dexAdapter);
-        Vault(vault).setDexAdapter(wethAddress, brettAddress, dexAdapter);
+        if (canSetAdapters) {
+            // Set direct adapter for BRETT <-> TOSHI
+            RugRumble(rugRumble).setDexAdapter(
+                brettAddress,
+                toshiAddress,
+                dexAdapter
+            );
+            RugRumble(rugRumble).setDexAdapter(
+                toshiAddress,
+                brettAddress,
+                dexAdapter
+            );
 
-        // Set adapters for TOSHI <-> WETH
-        RugRumble(rugRumble).setDexAdapter(
-            toshiAddress,
-            wethAddress,
-            dexAdapter
-        );
-        RugRumble(rugRumble).setDexAdapter(
-            wethAddress,
-            toshiAddress,
-            dexAdapter
-        );
+            Vault(vault).setDexAdapter(brettAddress, toshiAddress, dexAdapter);
+            Vault(vault).setDexAdapter(toshiAddress, brettAddress, dexAdapter);
 
-        Vault(vault).setDexAdapter(toshiAddress, wethAddress, dexAdapter);
-        Vault(vault).setDexAdapter(wethAddress, toshiAddress, dexAdapter);
+            // Update adapters for multi-hop routes via WETH
+            // Set adapters for BRETT <-> WETH
+            RugRumble(rugRumble).setDexAdapter(
+                brettAddress,
+                wethAddress,
+                dexAdapter
+            );
+            RugRumble(rugRumble).setDexAdapter(
+                wethAddress,
+                brettAddress,
+                dexAdapter
+            );
+
+            Vault(vault).setDexAdapter(brettAddress, wethAddress, dexAdapter);
+            Vault(vault).setDexAdapter(wethAddress, brettAddress, dexAdapter);
+
+            // Set adapters for TOSHI <-> WETH
+            RugRumble(rugRumble).setDexAdapter(
+                toshiAddress,
+                wethAddress,
+                dexAdapter
+            );
+            RugRumble(rugRumble).setDexAdapter(
+                wethAddress,
+                toshiAddress,
+                dexAdapter
+            );
+
+            Vault(vault).setDexAdapter(toshiAddress, wethAddress, dexAdapter);
+            Vault(vault).setDexAdapter(wethAddress, toshiAddress, dexAdapter);
+
+            console.log("Set up DEX adapters for pairs:");
+            console.log("- BRETT <-> TOSHI (direct)");
+            console.log("- BRETT <-> WETH");
+            console.log("- TOSHI <-> WETH");
+        } else {
+            console.log(
+                "Warning: Skipping DEX adapter setup - deployer is not owner"
+            );
+        }
 
         vm.stopBroadcast();
 
         // Log deployment information
         logDeploymentInfo(dexAdapter, rugRumble, vault);
+        if (!canSetAdapters) {
+            console.log(
+                "Note: DEX adapters were not set up. Please set them up using the owner account."
+            );
+        }
+
+        // If this is a new deployment, transfer ownership to final owner
+        if (forceNewDeployment && finalOwner != address(0)) {
+            console.log("Transferring ownership to final owner...");
+            this.transferAllOwnership(finalOwner, rugRumble, vault);
+        }
     }
 
     function getOrDeployTestToken(
@@ -111,7 +165,7 @@ contract DeployRugRumble is Script {
             return existingAddress;
         }
         MockERC20 token = new MockERC20(name, symbol);
-        token.mint(owner, 10000 * 10 ** 18);
+        token.mint(deploymentOwner, 10000 * 10 ** 18);
         console.log("Deployed new %s token at:", name, address(token));
         return address(token);
     }
@@ -121,7 +175,7 @@ contract DeployRugRumble is Script {
             "UNISWAP_V3_ADAPTER_ADDRESS",
             address(0)
         );
-        if (existingAddress != address(0)) {
+        if (existingAddress != address(0) && !forceNewDeployment) {
             console.log("Using existing UniswapV3Adapter at:", existingAddress);
             return existingAddress;
         }
@@ -134,18 +188,29 @@ contract DeployRugRumble is Script {
 
     function getOrDeployRugRumble() internal returns (address) {
         address existingAddress = vm.envOr("RUG_RUMBLE_ADDRESS", address(0));
-        if (existingAddress != address(0)) {
+        if (existingAddress != address(0) && !forceNewDeployment) {
             console.log("Using existing RugRumble at:", existingAddress);
+            RugRumble rugRumble = RugRumble(existingAddress);
+            // Check if we need to update owner
+            if (rugRumble.owner() != deploymentOwner && rugRumble.owner() == deployerAddress) {
+                rugRumble.updateOwner(deploymentOwner);
+            }
             return existingAddress;
         }
+
         RugRumble rugRumble = new RugRumble(
             protocol,
-            deployerAddress // Assuming deployerAddress as owner
+            deployerAddress
         );
 
         // Add supported tokens to RugRumble
         for (uint256 i = 0; i < initialSupportedTokens.length; i++) {
             rugRumble.addSupportedToken(initialSupportedTokens[i]);
+        }
+
+        // If deployer is not the intended owner, transfer ownership
+        if (deploymentOwner != deployerAddress) {
+            rugRumble.updateOwner(deploymentOwner);
         }
 
         console.log("Deployed new RugRumble at:", address(rugRumble));
@@ -154,30 +219,32 @@ contract DeployRugRumble is Script {
 
     function getOrDeployVault(address rugRumble) internal returns (address) {
         address existingAddress = vm.envOr("VAULT_ADDRESS", address(0));
-        if (existingAddress != address(0)) {
+        if (existingAddress != address(0) && !forceNewDeployment) {
             console.log("Using existing Vault at:", existingAddress);
+            // If using existing vault, check if we need to transfer ownership
+            Vault vault = Vault(existingAddress);
+            if (
+                vault.hasRole(vault.DEFAULT_ADMIN_ROLE(), deployerAddress) &&
+                deploymentOwner != deployerAddress
+            ) {
+                vault.transferOwnership(deploymentOwner);
+            }
             return existingAddress;
         }
 
         Vault vault = new Vault(
             address(rugRumble),
             initialSupportedTokens,
-            deployerAddress // Assuming deployerAddress as default admin
+            deployerAddress // deployerAddress as initial admin
         );
 
-        // Grant roles and transfer ownership
-        bytes32 epochControllerRole = vault.EPOCH_CONTROLLER_ROLE();
-        bytes32 ownerRole = vault.OWNER_ROLE();
-        vault.grantRole(epochControllerRole, owner);
-        vault.grantRole(ownerRole, owner);
-        vault.grantRole(vault.DEFAULT_ADMIN_ROLE(), owner);
-        vault.revokeRole(vault.DEFAULT_ADMIN_ROLE(), deployerAddress);
+        // Transfer ownership to the intended owner if different from deployer
+        if (deploymentOwner != deployerAddress) {
+            vault.transferOwnership(deploymentOwner);
+        }
 
         // Update vault address in RugRumble
         RugRumble(rugRumble).updateVault(address(vault));
-
-        // Transfer ownership of RugRumble to the intended owner
-        RugRumble(rugRumble).updateOwner(owner);
 
         console.log("Deployed new Vault at:", address(vault));
         return address(vault);
@@ -193,5 +260,44 @@ contract DeployRugRumble is Script {
         console.log("RugRumble deployed at:", rugRumble);
         console.log("Vault deployed at:", vault);
         console.log("API_KEY_BASESCAN:", vm.envString("API_KEY_BASESCAN"));
+    }
+
+    function transferAllOwnership(
+        address newOwner,
+        address rugRumbleAddress,
+        address vaultAddress
+    ) external {
+        require(newOwner != address(0), "New owner cannot be zero address");
+        require(rugRumbleAddress != address(0), "RugRumble address cannot be zero");
+        require(vaultAddress != address(0), "Vault address cannot be zero");
+
+        deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+        deployerAddress = vm.addr(deployerPrivateKey);
+
+        vm.startBroadcast(deployerPrivateKey);
+
+        // Transfer RugRumble ownership
+        RugRumble rugRumble = RugRumble(rugRumbleAddress);
+        if (rugRumble.owner() == deployerAddress) {
+            console.log("Transferring RugRumble ownership to:", newOwner);
+            rugRumble.updateOwner(newOwner);
+        } else {
+            console.log("Cannot transfer RugRumble ownership - not current owner");
+        }
+
+        // Transfer Vault ownership
+        Vault vault = Vault(vaultAddress);
+        if (vault.hasRole(vault.DEFAULT_ADMIN_ROLE(), deployerAddress)) {
+            console.log("Transferring Vault ownership to:", newOwner);
+            vault.transferOwnership(newOwner);
+        } else {
+            console.log("Cannot transfer Vault ownership - not current admin");
+        }
+
+        vm.stopBroadcast();
+
+        // Log final ownership status
+        console.log("Final RugRumble owner:", rugRumble.owner());
+        console.log("Final Vault admin:", vault.getRoleMember(vault.DEFAULT_ADMIN_ROLE(), 0));
     }
 }
