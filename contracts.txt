@@ -1,0 +1,11 @@
+== Logs ==
+  Deployed new UniswapV3Adapter at: 0x16c47Fad53D60Dd0561b933972afabb745c14c54
+  Deployed new RugRumble at: 0x23a4731b91a7a61961E6880c2657a49b81b9B927
+  Deployed new Vault at: 0x8f229c296A44a81f6A97Cf549cD2f7332807ED2e
+  Network: Mainnet
+  UniswapV3Adapter deployed at: 0x16c47Fad53D60Dd0561b933972afabb745c14c54
+  RugRumble deployed at: 0x23a4731b91a7a61961E6880c2657a49b81b9B927
+  Vault deployed at: 0x8f229c296A44a81f6A97Cf549cD2f7332807ED2e
+  API_KEY_BASESCAN: UK51R3I2ITB5BBS5I59RFN37AWY4XQ4WID
+
+## Setting up 1 EVM.

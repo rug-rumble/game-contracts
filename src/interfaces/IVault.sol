@@ -37,4 +37,7 @@ interface IVault {
     function endEpoch(uint256 epochId) external;
     function depositFromGame(uint256 epochId, uint256 gameId, address token, uint256 amount) external;
     function settleVault(bytes calldata swapData, address winningTokenAddress, uint256 epochId) external;
+    /// @notice Transfers ownership and all admin roles to a new owner
+    /// @param newOwner The address of the new owner
+    function transferOwnership(address newOwner) external;
 }

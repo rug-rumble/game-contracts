@@ -239,4 +239,19 @@ contract Vault is IVault, ReentrancyGuard, AccessControlEnumerable {
         playerWagerAmounts[playerCount] = wagerAmount;
         return (playerCount + 1, totalWagerAmount + wagerAmount);
     }
+
+    function transferOwnership(address newOwner) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(newOwner != address(0), "New owner cannot be zero address");
+        
+        // Revoke roles from old admin
+        address oldAdmin = getRoleMember(DEFAULT_ADMIN_ROLE, 0);
+        _revokeRole(DEFAULT_ADMIN_ROLE, oldAdmin);
+        _revokeRole(OWNER_ROLE, oldAdmin);
+        _revokeRole(EPOCH_CONTROLLER_ROLE, oldAdmin);
+        
+        // Grant roles to new admin
+        _grantRole(DEFAULT_ADMIN_ROLE, newOwner);
+        _grantRole(OWNER_ROLE, newOwner);
+        _grantRole(EPOCH_CONTROLLER_ROLE, newOwner);
+    }
 }
