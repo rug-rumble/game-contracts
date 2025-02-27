@@ -41,13 +41,20 @@ interface IRugRumble {
 
     /// @notice Deposits tokens for a specific game
     /// @param gameId The unique ID of the game
-    function depositForGame(uint256 gameId) external;
+    function depositForGame(
+        uint256 gameId, 
+        address token
+    ) external;
 
     /// @notice Ends a game, distributes the wagered tokens, and unlocks NFTs
     /// @param gameId The unique ID of the game
     /// @param winner The address of the winner
     /// @param data Additional data for the swap adapter
     function endGame(uint256 gameId, address winner, bytes calldata data) external;
+
+    /// @notice Refunds a game when needed, and resets active state
+    /// @param gameId The unique ID of the game
+    function refundGame(uint256 gameId) external;
 
     /// @notice Gets the details of a game by its gameId
     /// @param gameId The unique ID of the game

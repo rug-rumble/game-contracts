@@ -36,7 +36,7 @@ contract MockRugRumble is IRugRumble {
         });
     }
 
-    function depositForGame(uint256 gameId) external override {
+    function depositForGame(uint256 gameId, address token) external override {
         // No-op in this mock
     }
 
@@ -46,6 +46,10 @@ contract MockRugRumble is IRugRumble {
 
     function getGame(uint256 gameId) external view override returns (Game memory) {
         return games[gameId];
+    }
+
+    function refundGame(uint256 gameId) external override {
+        // No-op in this mock
     }
 
     function updateVault(address _newVault) external override {

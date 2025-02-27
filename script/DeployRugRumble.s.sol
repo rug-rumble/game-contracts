@@ -5,9 +5,9 @@ import "forge-std/Script.sol";
 import "forge-std/console.sol";
 import "../src/RugRumble.sol";
 import "../src/Vault.sol";
-import "../src/swap-adapters/UniswapV3Adapter.sol";
+import "../src/swap-adapters/UniswapV2Adapter.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "lib/v3-periphery/contracts/interfaces/ISwapRouter.sol";
+import "@uniswap/v2-periphery/contracts/interfaces/IUniswapV2Router02.sol";
 import "../test/utils/MockERC20.sol";
 
 contract DeployRugRumble is Script {
@@ -15,12 +15,13 @@ contract DeployRugRumble is Script {
     address deployerAddress;
     address protocol;
     address owner;
-    address uniswapV3Router;
+    address uniswapV2Router;
     bool isTestnet;
+    bool deployTestTokens;
     address[] initialSupportedTokens;
 
     // WETH on Base mainnet
-    address constant wethAddress = 0x4200000000000000000000000000000000000006;
+    address constant wmonAddress = 0x760AfE86e5de5fa0Ee542fc7B7B713e1c5425701;
 
     function run() external {
         // Initialize environment variables
@@ -28,76 +29,78 @@ contract DeployRugRumble is Script {
         deployerAddress = vm.addr(deployerPrivateKey);
         protocol = vm.envAddress("PROTOCOL_ADDRESS");
         owner = vm.envAddress("OWNER_ADDRESS");
-        uniswapV3Router = vm.envAddress("UNISWAP_V3_ROUTER");
+        uniswapV2Router = vm.envAddress("UNISWAP_V2_ROUTER");
         isTestnet = vm.envBool("IS_TESTNET");
+        deployTestTokens = vm.envBool("DEPLOY_TEST_TOKENS");
 
         vm.startBroadcast(deployerPrivateKey);
 
-        address brettAddress;
-        address toshiAddress;
-
-        // Deploy test tokens if testnet, otherwise use provided addresses
-        if (isTestnet) {
-            address meme1 = getOrDeployTestToken(
-                "MEME1",
-                "MEME1",
-                "MEME1_ADDRESS"
-            );
-            address meme2 = getOrDeployTestToken(
-                "MEME2",
-                "MEME2",
-                "MEME2_ADDRESS"
-            );
-            brettAddress = meme1;
-            toshiAddress = meme2;
+        // Deploy or get meme tokens
+        if (deployTestTokens) {
+            // Deploy test tokens if deployTestTokens flag is set
+            for (uint256 i = 0; i < 3; i++) {
+                string memory tokenNumber = vm.toString(i + 1);
+                string memory name = string.concat("MEME", tokenNumber);
+                string memory envVar = string.concat("MEME", tokenNumber, "_ADDRESS");
+                
+                address memeToken = getOrDeployTestToken(name, name, envVar);
+                initialSupportedTokens.push(memeToken);
+            }
         } else {
-            brettAddress = vm.envAddress("BRETT_ADDRESS");
-            toshiAddress = vm.envAddress("TOSHI_ADDRESS");
+            // Use provided meme addresses
+            string memory memeAddressesRaw = vm.envString("MEME_ADDRESSES");
+            initialSupportedTokens = parseAddressArray(memeAddressesRaw);
+            require(initialSupportedTokens.length > 0, "No meme addresses provided");
         }
 
-        initialSupportedTokens.push(brettAddress);
-        initialSupportedTokens.push(toshiAddress);
-
         // Deploy contracts
-        address dexAdapter = getOrDeployUniswapV3Adapter();
+        address dexAdapter = getOrDeployUniswapV2Adapter();
         address rugRumble = getOrDeployRugRumble();
         address vault = getOrDeployVault(rugRumble);
 
-        // Update adapters for multi-hop routes via WETH
-        // Set adapters for BRETT <-> WETH
-        RugRumble(rugRumble).setDexAdapter(
-            brettAddress,
-            wethAddress,
-            dexAdapter
-        );
-        RugRumble(rugRumble).setDexAdapter(
-            wethAddress,
-            brettAddress,
-            dexAdapter
-        );
-
-        Vault(vault).setDexAdapter(brettAddress, wethAddress, dexAdapter);
-        Vault(vault).setDexAdapter(wethAddress, brettAddress, dexAdapter);
-
-        // Set adapters for TOSHI <-> WETH
-        RugRumble(rugRumble).setDexAdapter(
-            toshiAddress,
-            wethAddress,
-            dexAdapter
-        );
-        RugRumble(rugRumble).setDexAdapter(
-            wethAddress,
-            toshiAddress,
-            dexAdapter
-        );
-
-        Vault(vault).setDexAdapter(toshiAddress, wethAddress, dexAdapter);
-        Vault(vault).setDexAdapter(wethAddress, toshiAddress, dexAdapter);
+        // Update adapters for multi-hop routes via WETH for all tokens
+        for (uint256 i = 0; i < initialSupportedTokens.length; i++) {
+            address memeToken = initialSupportedTokens[i];
+            
+            // Set adapters for MemeToken <-> WETH
+            RugRumble(rugRumble).setDexAdapter(memeToken, wmonAddress, dexAdapter);
+            RugRumble(rugRumble).setDexAdapter(wmonAddress, memeToken, dexAdapter);
+            Vault(vault).setDexAdapter(memeToken, wmonAddress, dexAdapter);
+            Vault(vault).setDexAdapter(wmonAddress, memeToken, dexAdapter);
+        }
 
         vm.stopBroadcast();
 
         // Log deployment information
         logDeploymentInfo(dexAdapter, rugRumble, vault);
+    }
+
+    function parseAddressArray(string memory addressesRaw) internal pure returns (address[] memory) {
+        // Split the comma-separated string of addresses
+        bytes memory addressesBytes = bytes(addressesRaw);
+        uint256 count = 1;
+        for (uint256 i = 0; i < addressesBytes.length; i++) {
+            if (addressesBytes[i] == ",") count++;
+        }
+        
+        address[] memory addresses = new address[](count);
+        uint256 addressIndex = 0;
+        uint256 startIndex = 0;
+        
+        for (uint256 i = 0; i < addressesBytes.length; i++) {
+            if (addressesBytes[i] == "," || i == addressesBytes.length - 1) {
+                uint256 endIndex = i == addressesBytes.length - 1 ? i + 1 : i;
+                bytes memory addressBytes = new bytes(endIndex - startIndex);
+                for (uint256 j = startIndex; j < endIndex; j++) {
+                    addressBytes[j - startIndex] = addressesBytes[j];
+                }
+                addresses[addressIndex] = vm.parseAddress(string(addressBytes));
+                addressIndex++;
+                startIndex = i + 1;
+            }
+        }
+        
+        return addresses;
     }
 
     function getOrDeployTestToken(
@@ -116,19 +119,19 @@ contract DeployRugRumble is Script {
         return address(token);
     }
 
-    function getOrDeployUniswapV3Adapter() internal returns (address) {
+    function getOrDeployUniswapV2Adapter() internal returns (address) {
         address existingAddress = vm.envOr(
-            "UNISWAP_V3_ADAPTER_ADDRESS",
+            "UNISWAP_V2_ADAPTER_ADDRESS",
             address(0)
         );
         if (existingAddress != address(0)) {
-            console.log("Using existing UniswapV3Adapter at:", existingAddress);
+            console.log("Using existing UniswapV2Adapter at:", existingAddress);
             return existingAddress;
         }
-        UniswapV3Adapter dexAdapter = new UniswapV3Adapter(
-            IV3SwapRouter(uniswapV3Router)
+        UniswapV2Adapter dexAdapter = new UniswapV2Adapter(
+            IUniswapV2Router02(uniswapV2Router)
         );
-        console.log("Deployed new UniswapV3Adapter at:", address(dexAdapter));
+        console.log("Deployed new UniswapV2Adapter at:", address(dexAdapter));
         return address(dexAdapter);
     }
 
@@ -189,9 +192,13 @@ contract DeployRugRumble is Script {
         address vault
     ) internal view {
         console.log("Network:", isTestnet ? "Testnet" : "Mainnet");
-        console.log("UniswapV3Adapter deployed at:", dexAdapter);
+        console.log("UniswapV2Adapter deployed at:", dexAdapter);
         console.log("RugRumble deployed at:", rugRumble);
         console.log("Vault deployed at:", vault);
+        console.log("Number of supported tokens:", initialSupportedTokens.length);
+        for (uint256 i = 0; i < initialSupportedTokens.length; i++) {
+            console.log("Token", i + 1, "address:", initialSupportedTokens[i]);
+        }
         console.log("API_KEY_BASESCAN:", vm.envString("API_KEY_BASESCAN"));
     }
 }

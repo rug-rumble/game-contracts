@@ -3,8 +3,8 @@ pragma solidity ^0.8.26;
 
 import "forge-std/Test.sol";
 import "forge-std/console.sol";
-import {ERC20} from "openzeppelin-contracts/contracts/token/ERC20/ERC20.sol";
-import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
+import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {RugRumble} from "../src/RugRumble.sol";
 import {Vault} from "../src/Vault.sol";
 import {IDexAdapter} from "../src/swap-adapters/interfaces/IDexAdapter.sol";
@@ -88,10 +88,10 @@ contract RugRumbleIntegrationTest is Test {
         );
 
         vm.prank(PLAYER1);
-        rugRumble.depositForGame(gameId);
+        rugRumble.depositForGame(gameId, address(token1));
 
         vm.prank(PLAYER2);
-        rugRumble.depositForGame(gameId);
+        rugRumble.depositForGame(gameId, address(token2));
 
         RugRumble.Game memory game = rugRumble.getGame(gameId);
         assertTrue(game.isActive, "Game should be active");

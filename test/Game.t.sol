@@ -126,17 +126,41 @@ contract RugRumbleGameTest is Test {
         );
 
         vm.prank(PLAYER1);
-        rugRumble.depositForGame(1);
+        rugRumble.depositForGame(1, address(token1));
 
         RugRumble.Game memory game = rugRumble.getGame(1);
         assertEq(game.player1, PLAYER1);
 
         vm.prank(PLAYER2);
-        rugRumble.depositForGame(1);
+        rugRumble.depositForGame(1, address(token2));
 
         game = rugRumble.getGame(1);
         assertEq(game.player2, PLAYER2);
         assertTrue(game.isActive);
+    }
+
+    function testRefundGame() public {
+        rugRumble.setGame(
+            1,
+            address(token1),
+            address(token2),
+            WAGER_AMOUNT,
+            WAGER_AMOUNT,
+            1
+        );
+
+        vm.prank(PLAYER1);
+        rugRumble.depositForGame(1, address(token1));
+
+        rugRumble.refundGame(1);
+
+        RugRumble.Game memory game = rugRumble.getGame(1);
+        assertEq(game.player1, address(0));
+        assertApproxEqAbs(
+            token1.balanceOf(PLAYER1),
+            INITIAL_BALANCE,
+            1e15
+        );
     }
 
     function testEndGame() public {
@@ -150,9 +174,9 @@ contract RugRumbleGameTest is Test {
         );
 
         vm.prank(PLAYER1);
-        rugRumble.depositForGame(1);
+        rugRumble.depositForGame(1, address(token1));
         vm.prank(PLAYER2);
-        rugRumble.depositForGame(1);
+        rugRumble.depositForGame(1, address(token2));
 
         bytes memory data = abi.encode(uint24(3000), address(0));
         rugRumble.endGame(1, PLAYER1, data);

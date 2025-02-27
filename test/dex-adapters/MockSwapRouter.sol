@@ -1,53 +1,38 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import "@uniswap/swap-router/contracts/interfaces/IV3SwapRouter.sol";
 import {MockERC20} from "../utils/MockERC20.sol";
 
-contract MockSwapRouter is IV3SwapRouter {
+contract MockSwapRouter {
     uint256 public amountOut;
 
     constructor(uint256 _amountOut) {
         amountOut = _amountOut;
     }
 
-    function exactInput(ExactInputParams calldata params) external payable override returns (uint256) {
+    function swapExactTokensForTokens(
+        uint,  // amountIn
+        uint,  // amountOutMin
+        address[] calldata path,
+        address to,
+        uint  // deadline
+    ) external returns (uint[] memory amounts) {
+        require(path.length >= 2, "MockSwapRouter: Invalid path length");
         
-        // Decode the path to extract the `toToken` address
-        address toToken = extractToToken(params.path);
+        // Mint the output token to the recipient
+        address toToken = path[path.length - 1];
+        MockERC20(toToken).mint(to, amountOut);
+
+        // Return amounts array with input and output amounts
+        amounts = new uint[](path.length);
+        amounts[0] = amountOut;  // Using amountOut as amountIn for simplicity
+        amounts[path.length - 1] = amountOut;
         
-        // Mint `toToken` to the recipient
-        MockERC20(toToken).mint(params.recipient, amountOut);
-
-        return amountOut;
-    }
-
-    function extractToToken(bytes memory path) internal pure returns (address toToken) {
-        // Uniswap V3 paths are packed as [address1][fee][address2][fee]...[fee][addressN]
-        // The last 20 bytes of the path represent the `toToken`
-        require(path.length >= 20, "MockSwapRouter: Invalid path length");
-
-        assembly {
-            // Load the last 20 bytes of the path
-            toToken := and(mload(add(path, mload(path))), 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF)
+        // Fill intermediate amounts if it's a multi-hop swap
+        for (uint i = 1; i < path.length - 1; i++) {
+            amounts[i] = amountOut / (path.length - i);
         }
-    }
 
-    function exactInputSingle(ExactInputSingleParams calldata) external payable returns (uint256) {
-        return amountOut;
+        return amounts;
     }
-
-    function exactOutputSingle(ExactOutputSingleParams calldata) external payable returns (uint256 amountIn) {
-        return amountOut;
-    }
-
-    function exactOutput(ExactOutputParams calldata) external payable returns (uint256 amountIn) {
-        return amountOut;
-    }
-
-    function uniswapV3SwapCallback(
-        int256,
-        int256,
-        bytes calldata
-    ) external {}
 }

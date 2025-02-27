@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
-import {ReentrancyGuard} from "openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IRugRumble} from "./interfaces/IRugRumble.sol";
 import {IVault} from "./interfaces/IVault.sol";
 import {IDexAdapter} from "./swap-adapters/interfaces/IDexAdapter.sol";
@@ -159,11 +159,11 @@ contract RugRumble is IRugRumble, ReentrancyGuard {
     }
 
     /// @inheritdoc IRugRumble
-    function depositForGame(uint256 gameId) external nonReentrant {
+    function depositForGame(uint256 gameId, address token) external nonReentrant {
         Game storage game = games[gameId];
         require(!game.isActive, "Game is already active");
 
-        if (game.player1 == address(0)) {
+        if (game.token1 == token && game.player1 == address(0)) {
             require(
                 IERC20(game.token1).allowance(msg.sender, address(this)) >=
                     game.wagerAmount1,
@@ -175,7 +175,7 @@ contract RugRumble is IRugRumble, ReentrancyGuard {
                 game.wagerAmount1
             );
             game.player1 = msg.sender;
-        } else {
+        } else if (game.token2 == token && game.player2 == address(0)) {
             require(
                 IERC20(game.token2).allowance(msg.sender, address(this)) >=
                     game.wagerAmount2,
@@ -187,8 +187,9 @@ contract RugRumble is IRugRumble, ReentrancyGuard {
                 game.wagerAmount2
             );
             game.player2 = msg.sender;
+        }
 
-            // Start the game when the second player deposits
+        if (game.player1 != address(0) && game.player2 != address(0)) {
             startGame(gameId);
         }
 
@@ -223,6 +224,43 @@ contract RugRumble is IRugRumble, ReentrancyGuard {
         uint256 winnerShare;
         uint256 vaultShare;
         uint256 protocolShare;
+    }
+
+    function refundGame(uint256 gameId) external onlyOwner nonReentrant {
+        Game storage game = games[gameId];
+        require(!game.isActive || game.winner == address(0), "Game already completed");
+        require(game.player1 != address(0) || game.player2 != address(0), "No deposits to refund");
+
+        // Refund player 1 if they deposited
+        if (game.player1 != address(0)) {
+            IERC20(game.token1).transfer(game.player1, game.wagerAmount1);
+            emit TokenDeposited(
+                gameId,
+                game.player1,
+                game.token1,
+                game.epochId,
+                0  // Amount set to 0 to indicate refund
+            );
+        }
+
+        // Refund player 2 if they deposited
+        if (game.player2 != address(0)) {
+            IERC20(game.token2).transfer(game.player2, game.wagerAmount2);
+            emit TokenDeposited(
+                gameId,
+                game.player2,
+                game.token2,
+                game.epochId,
+                0  // Amount set to 0 to indicate refund
+            );
+        }
+
+        // Reset game state
+        game.player1 = address(0);
+        game.player2 = address(0);
+        game.isActive = false;
+        game.winner = address(0);
+        game.loser = address(0);
     }
 
     /// @inheritdoc IRugRumble

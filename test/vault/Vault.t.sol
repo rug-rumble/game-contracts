@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IRugRumble} from "../../src/interfaces/IRugRumble.sol";
 import {IVault} from "../../src/interfaces/IVault.sol";
-import "../dex-adapters/MockUniswapV3Adapter.sol";
+import "../dex-adapters/MockUniswapV2Adapter.sol";
 import {MockERC20} from "../utils/MockERC20.sol";
 import {Vault} from "../../src/Vault.sol";
 import "./MockRugRumble.sol";
@@ -16,7 +16,7 @@ contract VaultTest is Test {
 
     Vault vault;
     MockRugRumble gameContract;
-    MockUniswapV3Adapter dexAdapter;
+    MockUniswapV2Adapter dexAdapter;
     MockERC20 tokenA;
     MockERC20 tokenB;
     address defaultAdmin = address(1);
@@ -33,7 +33,7 @@ contract VaultTest is Test {
 
     function setUp() public {
         gameContract = new MockRugRumble();
-        dexAdapter = new MockUniswapV3Adapter(200);
+        dexAdapter = new MockUniswapV2Adapter(200);
         tokenA = new MockERC20("Token A", "TKA");
         tokenB = new MockERC20("Token B", "TKB");
         // Deploy the Vault contract address;
@@ -331,7 +331,7 @@ contract VaultTest is Test {
         tokenAddresses[0] = address(tokenA);
         tokenAddresses[1] = address(tokenB);
 
-        MockUniswapV3Adapter _dexAdapter = new MockUniswapV3Adapter(tokenOutputAmount);
+        MockUniswapV2Adapter _dexAdapter = new MockUniswapV2Adapter(tokenOutputAmount);
         vm.prank(owner);
         vault.addSupportedToken(address(tokenA));
         vm.prank(owner);

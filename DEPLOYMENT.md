@@ -18,7 +18,7 @@ PRIVATE_KEY=<your_private_key>
 PROTOCOL_ADDRESS=<protocol_address>
 OWNER_ADDRESS=<owner_address>
 USDC_ADDRESS=<usdc_token_address>
-UNISWAP_V3_ROUTER=<uniswap_v3_router_address>
+UNISWAP_V2_ROUTER=<uniswap_v2_router_address>
 IS_TESTNET=<true_or_false>
 DEPLOY_TEST_TOKENS=<true_or_false>
 ```
@@ -68,7 +68,7 @@ For testnet and mainnet deployments, the `--verify` flag is included to automati
 After deployment, update this section with the deployed contract addresses:
 
 - RugRumbleNFT: `<address>`
-- UniswapV3Adapter: `<address>`
+- UniswapV2Adapter: `<address>`
 - RugRumble: `<address>`
 - Vault: `<address>`
 

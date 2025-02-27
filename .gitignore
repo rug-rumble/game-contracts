@@ -47,3 +47,5 @@ node_modules
 cache_forge/solidity-files-cache.json
 .vscode/settings.json
 .env.local
+
+lib/
