@@ -6,14 +6,14 @@ import "../src/RugRumble.sol";
 import "../src/Vault.sol";
 
 contract AddDexAdapters is Script {
-    address constant WETH_ADDRESS = 0x4200000000000000000000000000000000000006;
+    address constant WETH_ADDRESS = 0x760AfE86e5de5fa0Ee542fc7B7B713e1c5425701;
 
     function run() external {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
         address rugRumbleAddress = vm.envAddress("RUG_RUMBLE_ADDRESS");
         address vaultAddress = vm.envAddress("VAULT_ADDRESS");
         address dexAdapter = vm.envAddress("UNISWAP_V2_ADAPTER_ADDRESS");
-        address[] memory memeAddresses = abi.decode(vm.envBytes("MEME_ADDRESSES"), (address[]));
+        address[] memory memeAddresses = parseAddressArray(vm.envString("MEME_ADDRESSES"));
 
         console.log("RugRumble:", rugRumbleAddress);
         console.log("Vault:", vaultAddress);
@@ -42,5 +42,33 @@ contract AddDexAdapters is Script {
         }
 
         vm.stopBroadcast();
+    }
+
+    function parseAddressArray(string memory addressesRaw) internal pure returns (address[] memory) {
+        // Split the comma-separated string of addresses
+        bytes memory addressesBytes = bytes(addressesRaw);
+        uint256 count = 1;
+        for (uint256 i = 0; i < addressesBytes.length; i++) {
+            if (addressesBytes[i] == ",") count++;
+        }
+        
+        address[] memory addresses = new address[](count);
+        uint256 addressIndex = 0;
+        uint256 startIndex = 0;
+        
+        for (uint256 i = 0; i < addressesBytes.length; i++) {
+            if (addressesBytes[i] == "," || i == addressesBytes.length - 1) {
+                uint256 endIndex = i == addressesBytes.length - 1 ? i + 1 : i;
+                bytes memory addressBytes = new bytes(endIndex - startIndex);
+                for (uint256 j = startIndex; j < endIndex; j++) {
+                    addressBytes[j - startIndex] = addressesBytes[j];
+                }
+                addresses[addressIndex] = vm.parseAddress(string(addressBytes));
+                addressIndex++;
+                startIndex = i + 1;
+            }
+        }
+        
+        return addresses;
     }
 }

@@ -18,12 +18,17 @@ contract Vault is IVault, ReentrancyGuard, AccessControlEnumerable {
     uint256 public lastEpochId;
     IRugRumble public gameContract;
 
+    uint256 public constant BATCH_SIZE = 100;
+
     mapping(address => bool) public supportedTokens;
     mapping(bytes32 => address) public dexAdapters;
     mapping(uint256 => Epoch) public epochs;
     mapping(uint256 => uint256[]) public epochGames;
     mapping(uint256 => mapping(address => uint256)) public epochDeposits;
     mapping(address => uint256) public failedTokenSwaps;
+    mapping(uint256 => SettlementInfo) public settlementInfo;
+    mapping(uint256 => mapping(address => uint256)) public playerWagers;
+    mapping(uint256 => address[]) public epochEligiblePlayers;
 
     constructor(address _gameContract, address[] memory _supportedTokens, address _defaultAdmin) {
         require(_gameContract != address(0), "Game contract cannot be zero address");
@@ -46,6 +51,18 @@ contract Vault is IVault, ReentrancyGuard, AccessControlEnumerable {
 
     function getEpochGames(uint256 epochId) external view returns (uint256[] memory) {
         return epochGames[epochId];
+    }
+
+    function getEligiblePlayers(uint256 epochId) external view returns (address[] memory) {
+        return epochEligiblePlayers[epochId];
+    }
+
+    function getPlayerWager(uint256 epochId, address player) external view returns (uint256) {
+        return playerWagers[epochId][player];
+    }
+
+    function getSettlementInfo(uint256 epochId) external view returns (SettlementInfo memory) {
+        return settlementInfo[epochId];
     }
 
     function addSupportedToken(address tokenAddress) external onlyRole(OWNER_ROLE) {
@@ -73,7 +90,6 @@ contract Vault is IVault, ReentrancyGuard, AccessControlEnumerable {
         bytes32 reversePairHash = keccak256(abi.encodePacked(tokenB, tokenA));
         dexAdapters[reversePairHash] = _dexAdapter;
     }
-
 
     function startEpoch(address[] memory tokenAddresses) external onlyRole(EPOCH_CONTROLLER_ROLE) {
         lastEpochId++;
@@ -111,60 +127,176 @@ contract Vault is IVault, ReentrancyGuard, AccessControlEnumerable {
         emit DepositFromGame(epochId, gameId, token, amount);
     }
 
-    function settleVault(bytes calldata swapData, address winningTokenAddress, uint256 epochId) external nonReentrant onlyRole(EPOCH_CONTROLLER_ROLE) {
+    // Step 1: Initialize settlement process
+    function initSettlement(uint256 epochId, address winningTokenAddress) external onlyRole(EPOCH_CONTROLLER_ROLE) {
         Epoch storage epoch = epochs[epochId];
         require(epoch.state == EpochState.FINISHED, "Epoch is not finished yet");
         require(supportedTokens[winningTokenAddress], "Winning token is not supported");
         
-        // Use dynamic arrays to track player data in memory
+        // Initialize settlement info
+        SettlementInfo storage settlement = settlementInfo[epochId];
+        require(settlement.processedGameCount == 0, "Settlement already initialized");
+        
+        epoch.winningToken = winningTokenAddress;
+        emit SettlementInitialized(epochId, winningTokenAddress);
+    }
+
+    // Step 2: Process games in batches
+    function processGamesBatch(uint256 epochId, uint256 batchSize) external nonReentrant onlyRole(EPOCH_CONTROLLER_ROLE) {
+        Epoch storage epoch = epochs[epochId];
+        require(epoch.state == EpochState.FINISHED, "Epoch is not finished yet");
+        require(epoch.winningToken != address(0), "Winning token not set");
+        
+        SettlementInfo storage settlement = settlementInfo[epochId];
         uint256[] memory epochGamesArray = epochGames[epochId];
-        address[] memory eligiblePlayers = new address[](epochGamesArray.length);
-        uint256[] memory playerWagerAmounts = new uint256[](epochGamesArray.length);
-        uint256 playerCount = 0;
-
-        // Swap all non-winning tokens to winningTokenAddress
-        uint256 winningTokenBalance = _swapNonWinningTokens(epochId, winningTokenAddress, swapData);
-
-        // Calculate total wagers and track eligible players
-        uint256 totalWagerAmount = 0;
-        for (uint256 i = 0; i < epochGamesArray.length; i++) {
+        
+        uint256 endIdx = settlement.processedGameCount + batchSize;
+        if (endIdx > epochGamesArray.length) {
+            endIdx = epochGamesArray.length;
+        } 
+        
+        for (uint256 i = settlement.processedGameCount; i < endIdx; i++) {
             uint256 gameId = epochGamesArray[i];
             IRugRumble.Game memory game = gameContract.getGame(gameId);
-
-            if (game.token1 == winningTokenAddress) {
-                (playerCount, totalWagerAmount) = _updatePlayerWager(
-                    eligiblePlayers, 
-                    playerWagerAmounts, 
-                    playerCount, 
-                    totalWagerAmount, 
-                    game.player1, 
-                    game.wagerAmount1
-                );
-            } else if (game.token2 == winningTokenAddress) {
-                (playerCount, totalWagerAmount) = _updatePlayerWager(
-                    eligiblePlayers, 
-                    playerWagerAmounts, 
-                    playerCount, 
-                    totalWagerAmount, 
-                    game.player2, 
-                    game.wagerAmount2
-                );
+            
+            if (game.token1 == epoch.winningToken) {
+                _updatePlayerWager(epochId, game.player1, game.wagerAmount1);
+                settlement.totalWagerAmount += game.wagerAmount1;
+            } else if (game.token2 == epoch.winningToken) {
+                _updatePlayerWager(epochId, game.player2, game.wagerAmount2);
+                settlement.totalWagerAmount += game.wagerAmount2;
             }
         }
-
-        // Resize eligiblePlayers and playerWagerAmounts arrays to actual size
-        assembly { 
-            mstore(eligiblePlayers, playerCount)
-            mstore(playerWagerAmounts, playerCount)
+        
+        settlement.processedGameCount = endIdx;
+        
+        emit GamesBatchProcessed(epochId, settlement.processedGameCount, epochGamesArray.length);
+        
+        // If all games are processed
+        if (settlement.processedGameCount == epochGamesArray.length) {
+            emit AllGamesProcessed(epochId, settlement.playerCount, settlement.totalWagerAmount);
         }
-
-        // Distribute the winning tokens to eligible players
-        _distributeWinnings(epochId, winningTokenAddress, eligiblePlayers, playerWagerAmounts, winningTokenBalance, totalWagerAmount);
-
-        // Emit the VaultSettled event after distribution is complete
-        epoch.state = EpochState.SETTLED;
-        emit VaultSettled(epochId, winningTokenAddress, winningTokenBalance);
     }
+
+    // Step 3: Swap tokens
+    function swapTokens(uint256 epochId, bytes calldata swapData) external nonReentrant onlyRole(EPOCH_CONTROLLER_ROLE) {
+        Epoch storage epoch = epochs[epochId];
+        SettlementInfo storage settlement = settlementInfo[epochId];
+        
+        require(epoch.state == EpochState.FINISHED, "Epoch is not finished yet");
+        require(epoch.winningToken != address(0), "Winning token not set");
+        require(settlement.processedGameCount == epochGames[epochId].length, "Not all games processed");
+        require(!settlement.isSwapCompleted, "Swap already completed");
+        
+        uint256 winningTokenBalance = _swapNonWinningTokens(epochId, epoch.winningToken, swapData);
+        settlement.winningTokenBalance = winningTokenBalance;
+        settlement.isSwapCompleted = true;
+        
+        emit TokensSwapped(epochId, epoch.winningToken, winningTokenBalance);
+    }
+
+    // Step 4: Distribute winnings in batches
+    function distributeWinningsBatch(uint256 epochId, uint256 batchSize) external nonReentrant onlyRole(EPOCH_CONTROLLER_ROLE) {
+        Epoch storage epoch = epochs[epochId];
+        SettlementInfo storage settlement = settlementInfo[epochId];
+        
+        require(epoch.state == EpochState.FINISHED, "Epoch is not finished yet");
+        require(settlement.isSwapCompleted, "Tokens not swapped yet");
+        require(!settlement.isFullyDistributed, "Distribution already completed");
+        
+        address[] memory players = epochEligiblePlayers[epochId];
+        uint256 totalDistributedSoFar = 0;
+        uint256 startIdx = 0;
+        uint256 endIdx = players.length;
+        
+        // Find start index (continue from where we left off)
+        for (uint256 i = 0; i < players.length; i++) {
+            address player = players[i];
+            if (playerWagers[epochId][player] > 0) {
+                startIdx = i;
+                break;
+            }
+        }
+        
+        // Adjust end index based on batch size
+        if (startIdx + batchSize < players.length) {
+            endIdx = startIdx + batchSize;
+        }
+        
+        // Calculate total distributed so far
+        for (uint256 i = 0; i < startIdx; i++) {
+            address player = players[i];
+            uint256 wagerAmount = playerWagers[epochId][player];
+            if (wagerAmount > 0) {
+                uint256 distributedAmount = (wagerAmount * settlement.winningTokenBalance) / settlement.totalWagerAmount;
+                totalDistributedSoFar += distributedAmount;
+                // Mark as distributed by setting wager to 0
+                playerWagers[epochId][player] = 0;
+            }
+        }
+        
+        // Process this batch
+        for (uint256 i = startIdx; i < endIdx - 1; i++) {
+            address player = players[i];
+            uint256 wagerAmount = playerWagers[epochId][player];
+            if (wagerAmount > 0) {
+                uint256 amountToGive = (wagerAmount * settlement.winningTokenBalance) / settlement.totalWagerAmount;
+                totalDistributedSoFar += amountToGive;
+                require(IERC20(epoch.winningToken).transfer(player, amountToGive), "Token transfer failed");
+                emit TokenTransfered(epochId, epoch.winningToken, player, amountToGive);
+                // Mark as distributed
+                playerWagers[epochId][player] = 0;
+            }
+        }
+        
+        // If this is the last batch, handle the last player separately to account for rounding errors
+        if (endIdx == players.length) {
+            address lastPlayer = players[players.length - 1];
+            uint256 lastPlayerWager = playerWagers[epochId][lastPlayer];
+            if (lastPlayerWager > 0) {
+                uint256 remainingAmount = settlement.winningTokenBalance - totalDistributedSoFar;
+                require(IERC20(epoch.winningToken).transfer(lastPlayer, remainingAmount), "Token transfer failed");
+                emit TokenTransfered(epochId, epoch.winningToken, lastPlayer, remainingAmount);
+                // Mark as distributed
+                playerWagers[epochId][lastPlayer] = 0;
+                settlement.isFullyDistributed = true;
+                epoch.state = EpochState.SETTLED;
+                emit VaultSettled(epochId, epoch.winningToken, settlement.winningTokenBalance);
+            }
+        }
+        
+        emit DistributionBatchProcessed(epochId, endIdx, players.length);
+    }
+
+    // FAILSAFE FUNCTIONS
+
+    // Allow admin to rescue tokens stuck in the contract
+    function emergencyWithdraw(address token, address recipient, uint256 amount) external onlyRole(OWNER_ROLE) {
+        require(token != address(0), "Invalid token address");
+        require(recipient != address(0), "Invalid recipient address");
+        require(amount > 0, "Amount must be greater than 0");
+
+        uint256 contractBalance = IERC20(token).balanceOf(address(this));
+        require(contractBalance >= amount, "Insufficient balance");
+        
+        require(IERC20(token).transfer(recipient, amount), "Token transfer failed");
+        emit EmergencyWithdraw(token, recipient, amount);
+    }
+
+    // Allow admin to rescue failed token swaps
+    function recoverFailedSwap(address token, address recipient) external onlyRole(OWNER_ROLE) {
+        require(token != address(0), "Invalid token address");
+        require(recipient != address(0), "Invalid recipient address");
+        
+        uint256 amount = failedTokenSwaps[token];
+        require(amount > 0, "No failed swaps for this token");
+        
+        failedTokenSwaps[token] = 0;
+        require(IERC20(token).transfer(recipient, amount), "Token transfer failed");
+        emit FailedSwapRecovered(token, recipient, amount);
+    }
+
+    // HELPER FUNCTIONS
 
     function _swapNonWinningTokens(uint256 epochId, address winningTokenAddress, bytes calldata swapData) internal returns (uint256 winningTokenBalance) {
         Epoch storage epoch = epochs[epochId];
@@ -204,39 +336,15 @@ contract Vault is IVault, ReentrancyGuard, AccessControlEnumerable {
         }
     }
 
-    function _distributeWinnings(uint256 epochId, address winningTokenAddress, address[] memory eligiblePlayers, uint256[] memory playerWagerAmounts, uint256 winningTokenBalance, uint256 totalWagerAmount) internal {
-        uint256 totalDistributed = 0;
-        uint256 lastIndex = eligiblePlayers.length - 1;
-
-        for (uint256 i = 0; i < lastIndex; i++) {
-            uint256 amountToGive = (playerWagerAmounts[i] * winningTokenBalance) / totalWagerAmount;
-            totalDistributed += amountToGive;
-            require(IERC20(winningTokenAddress).transfer(eligiblePlayers[i], amountToGive), "Token transfer failed");
-            emit TokenTransfered(epochId, winningTokenAddress, eligiblePlayers[i], amountToGive);
+    function _updatePlayerWager(uint256 epochId, address player, uint256 wagerAmount) internal {
+        SettlementInfo storage settlement = settlementInfo[epochId];
+        
+        if (playerWagers[epochId][player] == 0) {
+            // New player
+            epochEligiblePlayers[epochId].push(player);
+            settlement.playerCount++;
         }
-
-        // Distribute remaining balance to the last player
-        uint256 remainingAmount = winningTokenBalance - totalDistributed;
-        require(IERC20(winningTokenAddress).transfer(eligiblePlayers[lastIndex], remainingAmount), "Token transfer failed");
-        emit TokenTransfered(epochId, winningTokenAddress, eligiblePlayers[lastIndex], remainingAmount);
-    }
-    // Helper function to update player wager and track eligible players
-    function _updatePlayerWager(
-        address[] memory eligiblePlayers, 
-        uint256[] memory playerWagerAmounts, 
-        uint256 playerCount, 
-        uint256 totalWagerAmount, 
-        address player, 
-        uint256 wagerAmount
-    ) internal pure returns (uint256, uint256) {
-        for (uint256 j = 0; j < playerCount; j++) {
-            if (eligiblePlayers[j] == player) {
-                playerWagerAmounts[j] += wagerAmount;
-                return (playerCount, totalWagerAmount + wagerAmount);
-            }
-        }
-        eligiblePlayers[playerCount] = player;
-        playerWagerAmounts[playerCount] = wagerAmount;
-        return (playerCount + 1, totalWagerAmount + wagerAmount);
+        
+        playerWagers[epochId][player] += wagerAmount;
     }
 }

@@ -69,6 +69,17 @@ contract DeployRugRumble is Script {
             Vault(vault).setDexAdapter(wmonAddress, memeToken, dexAdapter);
         }
 
+        // Update adapters for meme routes via WETH for all tokens
+        for (uint i = 0; i < initialSupportedTokens.length; i++) {
+            for (uint j = i + 1; j < initialSupportedTokens.length; j++) {
+                // Set adapters for token0 <-> token1 and vice versa
+                RugRumble(rugRumble).setDexAdapter(initialSupportedTokens[i], initialSupportedTokens[j], dexAdapter);
+                RugRumble(rugRumble).setDexAdapter(initialSupportedTokens[j], initialSupportedTokens[i], dexAdapter);
+                Vault(vault).setDexAdapter(initialSupportedTokens[i], initialSupportedTokens[j], dexAdapter);
+                Vault(vault).setDexAdapter(initialSupportedTokens[j], initialSupportedTokens[i], dexAdapter);
+            }
+        }
+
         vm.stopBroadcast();
 
         // Log deployment information

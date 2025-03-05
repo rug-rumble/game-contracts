@@ -372,185 +372,295 @@ contract VaultTest is Test {
         vault.endEpoch(epochId);
     }
 
-    function testSettleVault_Success() public {
-        uint256 depositAmountA = 100;
-        uint256 depositAmountB = 200;
+
+    function testInitSettlement_Success() public {
         uint256 gameId = 1;
         uint256 epochId = 1;
-        bytes memory swapData = abi.encode(uint24(3000), address(0));
-        uint24 tokenOutputAmount = 200;
-        setupAndStartEpoch(tokenOutputAmount);
-
-        setupGame(gameId, address(tokenA), address(tokenB), depositAmountA, depositAmountB, player1, player2, player1, player2, epochId);
-        depositFromGame(depositAmountA, gameId, epochId, tokenA);
-        depositFromGame(depositAmountB, gameId, epochId, tokenB);
+        
+        setupAndStartEpoch(200);
+        setupGame(gameId, address(tokenA), address(tokenB), 100, 200, player1, player2, player1, player2, epochId);
+        depositFromGame(100, gameId, epochId, tokenA);
+        depositFromGame(200, gameId, epochId, tokenB);
         finishEpoch(epochId);
-
-        // Expect the VaultSettled event to be emitted
+        
+        // Expect the SettlementInitialized event to be emitted
         vm.expectEmit(true, true, true, true);
-        emit IVault.VaultSettled(epochId, address(tokenA), depositAmountA+tokenOutputAmount);
-
+        emit IVault.SettlementInitialized(epochId, address(tokenA));
+        
         vm.prank(epochController);
-        vault.settleVault(swapData, address(tokenA), epochId);
-        // Get player1 balance and verify the balance to be equal to depositAmountA
-        uint256 player1Balance = tokenA.balanceOf(player1);
-        assertEq(player1Balance, depositAmountA+tokenOutputAmount);
+        vault.initSettlement(epochId, address(tokenA));
+        
+        // Verify the winning token was set correctly
+        IVault.Epoch memory epoch = vault.getEpoch(epochId);
+        assertEq(epoch.winningToken, address(tokenA));
     }
-
-    function testSettleVault_SuccessSimpleTokenDistribution() public {
-        uint256 depositAmountA = 100;
-        uint256 depositAmountB = 200;
-        uint256 gameId = 1;
-        uint256 gameId2 = 2;
+    
+    function testInitSettlement_EpochNotFinished() public {
         uint256 epochId = 1;
-        bytes memory swapData = abi.encode(uint24(3000), address(0));
-        uint256 tokenOutputAmount = 300;
-        setupAndStartEpoch(tokenOutputAmount);
-
-        setupGame(gameId, address(tokenA), address(tokenB), depositAmountA, depositAmountB, player1, player2, player1, player2, epochId);
-        setupGame(gameId2, address(tokenA), address(tokenB), depositAmountA, depositAmountB, player3, player4, player3, player4, epochId);
-        depositFromGame(depositAmountA, gameId, epochId, tokenA);
-        depositFromGame(depositAmountB, gameId2, epochId, tokenB);
-
-        finishEpoch(epochId);
-
-        // Expect the VaultSettled event to be emitted
-        vm.expectEmit(true, true, true, true);
-        emit IVault.VaultSettled(epochId, address(tokenA), depositAmountA+tokenOutputAmount);
-
-        vm.prank(epochController);
-        vault.settleVault(swapData, address(tokenA), epochId);
-
-        // assert player1 tokenA balance is 150 and player2 tokenA balance is 150
-        uint256 player1Balance = tokenA.balanceOf(player1);
-        uint256 player3Balance = tokenA.balanceOf(player3);
-        assertEq(player1Balance, (depositAmountA+tokenOutputAmount)/2);
-        assertEq(player3Balance, (depositAmountA+tokenOutputAmount)/2);
-    }
-
-    function testSettleVault_SuccessComplexTokenDistribution() public {
-        uint256 depositAmountA = 133;
-        uint256 depositAmountB = 459;
-        uint256 gameId = 1;
-        uint256 gameId2 = 2;
-        uint256 epochId = 1;
-        bytes memory swapData = abi.encode(uint24(3000), address(0));
-        uint256 tokenOutputAmount = 294;
-        setupAndStartEpoch(tokenOutputAmount);
-
-        setupGame(gameId, address(tokenA), address(tokenB), depositAmountA, depositAmountB, player1, player2, player1, player2, epochId);
-        setupGame(gameId2, address(tokenA), address(tokenB), depositAmountA, depositAmountB, player3, player4, player3, player4, epochId);
-        depositFromGame(depositAmountA, gameId, epochId, tokenA);
-        depositFromGame(depositAmountB, gameId2, epochId, tokenB);
-
-        finishEpoch(epochId);
-
-        // Calculate the expected total amount of winning tokens after swaps
-        uint256 expectedWinningTokenBalance = depositAmountA+tokenOutputAmount; // Adjust this based on your swap logic
-
-        // Expect the VaultSettled event to be emitted with the correct total winning token balance
-        vm.expectEmit(true, true, true, true);
-        emit IVault.VaultSettled(epochId, address(tokenA), expectedWinningTokenBalance);
-
-        vm.prank(epochController);
-        vault.settleVault(swapData, address(tokenA), epochId);
-
-        // assert player1 tokenA balance is 213 after rounding off and player2 tokenA balance is 214
-        uint256 player1Balance = tokenA.balanceOf(player1);
-        uint256 player3Balance = tokenA.balanceOf(player3);
-        assertEq(player1Balance, 213);
-        assertEq(player3Balance, 214);
-    }
-
-    function testSettleVault_EpochNotFinished() public {
-        uint256 depositAmountA = 100;
-        uint256 depositAmountB = 200;
-        uint256 gameId = 1;
-        uint256 epochId = 1;
-        bytes memory swapData = abi.encode(uint24(3000), address(0));
-
-        setupAndStartEpoch(100);
-        setupGame(gameId, address(tokenA), address(tokenB), depositAmountA, depositAmountB, player1, player2, player1, player2, epochId);
-        depositFromGame(depositAmountA, gameId, epochId, tokenA);
-
-        // Attempt to settle the vault before finishing the epoch
+        
+        setupAndStartEpoch(200);
+        
+        // Attempt to initialize settlement before finishing the epoch
         vm.prank(epochController);
         vm.expectRevert("Epoch is not finished yet");
-        vault.settleVault(swapData, address(tokenA), epochId);
+        vault.initSettlement(epochId, address(tokenA));
     }
-
-    function testSettleVault_NoDexAdapter() public {
-        uint256 depositAmountA = 100;
-        uint256 depositAmountB = 200;
+    
+    function testInitSettlement_TokenNotSupported() public {
         uint256 gameId = 1;
         uint256 epochId = 1;
-        bytes memory swapData = abi.encode(uint24(3000), address(0));
-
-        // Set up initial conditions without setting a DEX adapter
-        address[] memory tokenAddresses = new address[](2);
-        tokenAddresses[0] = address(tokenA);
-        tokenAddresses[1] = address(tokenB);
-
-        vm.prank(owner);
-        vault.addSupportedToken(address(tokenA));
-        vm.prank(owner);
-        vault.addSupportedToken(address(tokenB));
-
-        vm.prank(epochController);
-        vault.startEpoch(tokenAddresses);
-
-        setupGame(gameId, address(tokenA), address(tokenB), depositAmountA, depositAmountB, player1, player2, player1, player2, epochId);
-        depositFromGame(depositAmountA, gameId, epochId, tokenA);
-        depositFromGame(depositAmountB, gameId, epochId, tokenB);
-        finishEpoch(epochId);
-
-        // Attempt to settle the vault without a DEX adapter
-        vm.prank(epochController);
-        vm.expectRevert("No DEX adapter found for this pair");
-        vault.settleVault(swapData, address(tokenA), epochId);
-    }
-
-    function testSettleVault_TokenTransferFailed() public {
-        uint256 depositAmountA = 100;
-        uint256 depositAmountB = 200;
-        uint256 gameId = 1;
-        uint256 epochId = 1;
-        bytes memory swapData = abi.encode(uint24(3000), address(0));
-
-        setupAndStartEpoch(100);
-        setupGame(gameId, address(tokenA), address(tokenB), depositAmountA, depositAmountB, player1, player2, player1, player2, epochId);
-        depositFromGame(depositAmountA, gameId, epochId, tokenA);
-        finishEpoch(epochId);
-
-        // Simulate token transfer failure
-        vm.mockCall(
-            address(tokenA),
-            abi.encodeWithSelector(IERC20.transfer.selector, player1, 100),
-            abi.encode(false)
-        );
-
-        // Attempt to settle the vault, expect a revert due to token transfer failure
-        vm.prank(epochController);
-        vm.expectRevert("Token transfer failed");
-        vault.settleVault(swapData, address(tokenA), epochId);
-    }
-
-    function testSettleVault_InvalidWinningToken() public {
-        uint256 depositAmountA = 100;
-        uint256 depositAmountB = 200;
-        uint256 gameId = 1;
-        uint256 epochId = 1;
-        bytes memory swapData = abi.encode(uint24(3000), address(0));
-
-        setupAndStartEpoch(100);
-        setupGame(gameId, address(tokenA), address(tokenB), depositAmountA, depositAmountB, player1, player2, player1, player2, epochId);
-        depositFromGame(depositAmountA, gameId, epochId, tokenA);
         
+        setupAndStartEpoch(200);
+        setupGame(gameId, address(tokenA), address(tokenB), 100, 200, player1, player2, player1, player2, epochId);
+        depositFromGame(100, gameId, epochId, tokenA);
         finishEpoch(epochId);
-
-        // Attempt to settle the vault with an invalid winning token
+        
+        // Create an unsupported token
+        MockERC20 unsupportedToken = new MockERC20("Unsupported", "UNSUP");
+        
+        // Attempt to initialize settlement with unsupported token
         vm.prank(epochController);
         vm.expectRevert("Winning token is not supported");
-        vault.settleVault(swapData, address(0xDEAD), epochId);
+        vault.initSettlement(epochId, address(unsupportedToken));
+    }
+    
+    function testProcessGamesBatch_Success() public {
+        uint256 gameId1 = 1;
+        uint256 gameId2 = 2;
+        uint256 epochId = 1;
+        uint256 depositAmountA = 100;
+        uint256 depositAmountB = 200;
+        
+        setupAndStartEpoch(200);
+        
+        // Setup two games
+        setupGame(gameId1, address(tokenA), address(tokenB), depositAmountA, depositAmountB, player1, player2, player1, player2, epochId);
+        setupGame(gameId2, address(tokenA), address(tokenB), depositAmountA, depositAmountB, player3, player4, player3, player4, epochId);
+        
+        // Deposit tokens for both games
+        depositFromGame(depositAmountA, gameId1, epochId, tokenA);
+        depositFromGame(depositAmountA, gameId2, epochId, tokenB);
+        
+        finishEpoch(epochId);
+        
+        // Initialize settlement
+        vm.prank(epochController);
+        vault.initSettlement(epochId, address(tokenA));
+        
+        // Process games batch (process all games in one go)
+        vm.expectEmit(true, true, true, true);
+        emit IVault.GamesBatchProcessed(epochId, 2, 2);
+        
+        vm.prank(epochController);
+        vault.processGamesBatch(epochId, 2);
+        
+        // Verify all games were processed
+        IVault.SettlementInfo memory settlement = vault.getSettlementInfo(epochId);
+        assertEq(settlement.processedGameCount, 2);
+        assertEq(settlement.totalWagerAmount, depositAmountA * 2); // Both player1 and player3 wagered tokenA
+        assertEq(settlement.playerCount, 2); // player1 and player3
+        
+        // Check that the AllGamesProcessed event was emitted
+        // vm.expectEmit(true, true, true, true);
+        // emit IVault.AllGamesProcessed(epochId, 2, depositAmountA * 2);
+    }
+    
+    function testProcessGamesBatch_EpochNotFinished() public {
+        uint256 epochId = 1;
+        
+        setupAndStartEpoch(200);
+        
+        // Attempt to process games before finishing the epoch
+        vm.prank(epochController);
+        vm.expectRevert("Epoch is not finished yet");
+        vault.processGamesBatch(epochId, 10);
+    }
+    
+    function testProcessGamesBatch_WinningTokenNotSet() public {
+        uint256 gameId = 1;
+        uint256 epochId = 1;
+        
+        setupAndStartEpoch(200);
+        setupGame(gameId, address(tokenA), address(tokenB), 100, 200, player1, player2, player1, player2, epochId);
+        depositFromGame(100, gameId, epochId, tokenA);
+        finishEpoch(epochId);
+        
+        // Attempt to process games without initializing settlement
+        vm.prank(epochController);
+        vm.expectRevert("Winning token not set");
+        vault.processGamesBatch(epochId, 10);
+    }
+    
+    function testSwapTokens_Success() public {
+        uint256 gameId1 = 1;
+        uint256 gameId2 = 2;
+        uint256 epochId = 1;
+        uint256 depositAmountA = 100;
+        uint256 depositAmountB = 200;
+        bytes memory swapData = abi.encode(uint24(3000), address(0));
+        uint256 tokenOutputAmount = 200;
+        
+        setupAndStartEpoch(tokenOutputAmount);
+        
+        // Setup two games
+        setupGame(gameId1, address(tokenA), address(tokenB), depositAmountA, depositAmountB, player1, player2, player1, player2, epochId);
+        setupGame(gameId2, address(tokenA), address(tokenB), depositAmountA, depositAmountB, player3, player4, player3, player4, epochId);
+        
+        // Deposit tokens for both games
+        depositFromGame(depositAmountA, gameId1, epochId, tokenA);
+        depositFromGame(depositAmountB, gameId2, epochId, tokenB);
+
+        finishEpoch(epochId);
+        
+        // Initialize settlement
+        vm.prank(epochController);
+        vault.initSettlement(epochId, address(tokenA));
+        
+        // Process games
+        vm.prank(epochController);
+        vault.processGamesBatch(epochId, 2);
+        
+        // Swap tokens
+        vm.expectEmit(true, true, true, true);
+        emit IVault.TokensSwapped(epochId, address(tokenA), depositAmountA + tokenOutputAmount);
+        
+        vm.prank(epochController);
+        vault.swapTokens(epochId, swapData);
+        
+        // Verify tokens were swapped correctly
+        IVault.SettlementInfo memory settlement = vault.getSettlementInfo(epochId);
+        assertEq(settlement.winningTokenBalance, depositAmountA + tokenOutputAmount);
+        assertTrue(settlement.isSwapCompleted);
+    }
+    
+    function testSwapTokens_NotAllGamesProcessed() public {
+        uint256 gameId1 = 1;
+        uint256 gameId2 = 2;
+        uint256 epochId = 1;
+        
+        setupAndStartEpoch(200);
+        setupGame(gameId1, address(tokenA), address(tokenB), 100, 200, player1, player2, player1, player2, epochId);
+        setupGame(gameId2, address(tokenA), address(tokenB), 100, 200, player3, player4, player3, player4, epochId);
+        depositFromGame(100, gameId1, epochId, tokenA);
+        depositFromGame(200, gameId2, epochId, tokenB);
+        finishEpoch(epochId);
+        
+        // Initialize settlement
+        vm.prank(epochController);
+        vault.initSettlement(epochId, address(tokenA));
+        
+        // Process only one game
+        vm.prank(epochController);
+        vault.processGamesBatch(epochId, 1);
+        
+        // Attempt to swap tokens before all games are processed
+        bytes memory swapData = abi.encode(uint24(3000), address(0));
+        vm.prank(epochController);
+        vm.expectRevert("Not all games processed");
+        vault.swapTokens(epochId, swapData);
+    }
+    
+    function testDistributeWinningsBatch_Success() public {
+        uint256 gameId1 = 1;
+        uint256 gameId2 = 2;
+        uint256 epochId = 1;
+        uint256 depositAmountA = 100;
+        uint256 depositAmountB = 200;
+        bytes memory swapData = abi.encode(uint24(3000), address(0));
+        uint256 tokenOutputAmount = 100;
+        
+        setupAndStartEpoch(tokenOutputAmount);
+        setupGame(gameId1, address(tokenA), address(tokenB), depositAmountA, depositAmountB, player1, player2, player1, player2, epochId);
+        setupGame(gameId2, address(tokenA), address(tokenB), depositAmountA, depositAmountB, player3, player4, player3, player4, epochId);
+        depositFromGame((depositAmountA), gameId1, epochId, tokenA);
+        depositFromGame((depositAmountA), gameId2, epochId, tokenA);
+        finishEpoch(epochId);
+        
+        // Complete settlement initialization and swaps
+        vm.prank(epochController);
+        vault.initSettlement(epochId, address(tokenA));
+        
+        vm.prank(epochController);
+        vault.processGamesBatch(epochId, 2);
+        
+        vm.prank(epochController);
+        vault.swapTokens(epochId, swapData);
+        
+        // Distribute winnings
+        vm.expectEmit(true, true, true, true);
+        emit IVault.DistributionBatchProcessed(epochId, 2, 2);
+        
+        vm.prank(epochController);
+        vault.distributeWinningsBatch(epochId, 2);
+        
+        // Verify distributions
+        uint256 player1Balance = tokenA.balanceOf(player1);
+        uint256 player3Balance = tokenA.balanceOf(player3);
+        
+        // Total winning token balance is 300 (depositAmountA*2 + tokenOutputAmount)
+        // Each player should get approximately half
+        assertEq(player1Balance + player3Balance, depositAmountA * 2);
+
+        // Verify epoch state
+        IVault.Epoch memory epoch = vault.getEpoch(epochId);
+        assertEq(uint(epoch.state), uint(IVault.EpochState.SETTLED));
+    }
+    
+    function testDistributeWinningsBatch_SwapNotCompleted() public {
+        uint256 gameId = 1;
+        uint256 epochId = 1;
+        
+        setupAndStartEpoch(200);
+        setupGame(gameId, address(tokenA), address(tokenB), 100, 200, player1, player2, player1, player2, epochId);
+        depositFromGame(100, gameId, epochId, tokenA);
+        finishEpoch(epochId);
+        
+        // Initialize settlement and process games but don't swap tokens
+        vm.prank(epochController);
+        vault.initSettlement(epochId, address(tokenA));
+        
+        vm.prank(epochController);
+        vault.processGamesBatch(epochId, 1);
+        
+        // Attempt to distribute winnings before swapping tokens
+        vm.prank(epochController);
+        vm.expectRevert("Tokens not swapped yet");
+        vault.distributeWinningsBatch(epochId, 1);
+    }
+    
+    function testEmergencyWithdraw_Success() public {
+        uint256 withdrawAmount = 100;
+        address recipient = address(99);
+        
+        // Mint some tokens to the vault contract
+        tokenA.mint(address(vault), withdrawAmount);
+        
+        // Verify initial balances
+        assertEq(tokenA.balanceOf(address(vault)), withdrawAmount);
+        assertEq(tokenA.balanceOf(recipient), 0);
+        
+        // Perform emergency withdrawal
+        vm.expectEmit(true, true, true, true);
+        emit IVault.EmergencyWithdraw(address(tokenA), recipient, withdrawAmount);
+        
+        vm.prank(owner);
+        vault.emergencyWithdraw(address(tokenA), recipient, withdrawAmount);
+        
+        // Verify tokens were transferred
+        assertEq(tokenA.balanceOf(address(vault)), 0);
+        assertEq(tokenA.balanceOf(recipient), withdrawAmount);
+    }
+    
+    function testEmergencyWithdraw_InsufficientBalance() public {
+        uint256 withdrawAmount = 100;
+        address recipient = address(99);
+        
+        // Mint some tokens to the vault contract
+        tokenA.mint(address(vault), withdrawAmount - 1);
+        
+        // Attempt to withdraw more than available
+        vm.prank(owner);
+        vm.expectRevert("Insufficient balance");
+        vault.emergencyWithdraw(address(tokenA), recipient, withdrawAmount);
     }
 }
