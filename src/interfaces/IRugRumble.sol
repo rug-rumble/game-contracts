@@ -24,6 +24,17 @@ interface IRugRumble {
     /// @param _token The address of the token to be removed
     function removeSupportedToken(address _token) external;
 
+
+    /// @notice Allows users to deposit tokens without a specific game ID
+    /// @param token The token to deposit
+    /// @param amount The amount to deposit
+    function deposit(address token, uint256 amount) external;
+
+    /// @notice Allows users to withdraw their deposited tokens if not in a game
+    /// @param token The token to withdraw
+    /// @param amount The amount to withdraw
+    function withdrawDeposit(address token, uint256 amount) external;
+
     /// @notice Sets the details for a new game with the specified gameId, tokens, wager amounts, and NFT decks
     /// @param gameId The unique ID of the game
     /// @param token1 The ERC20 token used by the first player
@@ -32,6 +43,8 @@ interface IRugRumble {
     /// @param wagerAmount2 The amount wagered by the second player
     function setGame(
         uint256 gameId,
+        address player1,
+        address player2,
         address token1,
         address token2,
         uint256 wagerAmount1,
@@ -39,12 +52,11 @@ interface IRugRumble {
         uint256 epochId
     ) external;
 
-    /// @notice Deposits tokens for a specific game
-    /// @param gameId The unique ID of the game
-    function depositForGame(
-        uint256 gameId, 
-        address token
-    ) external;
+    /// @notice Refunds deposits to a specific user
+    /// @param user The address of the user to refund
+    /// @param token The token address to refund
+    /// @param amount The amount to refund
+    function refundUser(address user, address token, uint256 amount) external;
 
     /// @notice Ends a game, distributes the wagered tokens, and unlocks NFTs
     /// @param gameId The unique ID of the game
@@ -60,6 +72,12 @@ interface IRugRumble {
     /// @param gameId The unique ID of the game
     /// @return The Game struct containing the game's details
     function getGame(uint256 gameId) external view returns (Game memory);
+
+    /// @notice Returns the deposit amount for a user and token
+    /// @param user The user address
+    /// @param token The token address
+    /// @return The amount of tokens deposited
+    function getUserDeposit(address user, address token) external returns (uint256);
 
     /// @notice Updates the vault address
     /// @param _newVault The new vault address

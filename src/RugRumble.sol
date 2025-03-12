@@ -8,7 +8,7 @@ import {IVault} from "./interfaces/IVault.sol";
 import {IDexAdapter} from "./swap-adapters/interfaces/IDexAdapter.sol";
 
 /// @title RugRumble Contract
-/// @notice Implements the RugRumble game functionality
+/// @notice Implements the RugRumble game functionality with deposit-first approach
 contract RugRumble is IRugRumble, ReentrancyGuard {
     /// @notice Address where a portion of the wagered tokens will be sent
     address public vault;
@@ -25,9 +25,32 @@ contract RugRumble is IRugRumble, ReentrancyGuard {
     /// @notice Mapping to track supported ERC20 tokens
     mapping(address => bool) public supportedTokens;
 
+    /// @notice Mapping of token pair hashes to DEX adapters
     mapping(bytes32 => address) public dexAdapters;
 
+    /// @notice Mapping to track user deposits by token
+    mapping(address => mapping(address => uint256)) public userDeposits;
+
     /// @notice Events to log important actions in the contract
+    event UserDeposited(
+        address indexed user,
+        address indexed token,
+        uint256 amount
+    );
+
+    event UserWithdrawn(
+        address indexed user,
+        address indexed token,
+        uint256 amount
+    );
+
+    event UserRefunded(
+        address indexed user,
+        uint256 indexed gameId,
+        address token,
+        uint256 amount
+    );
+
     event GameSet(
         uint256 indexed gameId,
         uint256 indexed epochId,
@@ -35,14 +58,6 @@ contract RugRumble is IRugRumble, ReentrancyGuard {
         address token2,
         uint256 wagerAmount1,
         uint256 wagerAmount2
-    );
-
-    event TokenDeposited(
-        uint256 indexed gameId,
-        address indexed player,
-        address indexed token,
-        uint256 epochId,
-        uint256 amount
     );
 
     event GameStarted(
@@ -62,6 +77,12 @@ contract RugRumble is IRugRumble, ReentrancyGuard {
         address loserToken
     );
 
+    event GameRefunded(
+        uint256 indexed gameId,
+        address indexed player1,
+        address indexed player2
+    );
+
     event WagerDistributed(
         uint256 indexed gameId,
         address indexed winner,
@@ -78,7 +99,7 @@ contract RugRumble is IRugRumble, ReentrancyGuard {
         _;
     }
 
-    /// @notice Constructor to initialize the contract with vault, protocol, owner addresses
+    /// @notice Constructor to initialize the contract with protocol, owner addresses
     /// @param _protocol The address of the protocol to receive a percentage of the wager
     /// @param _owner The address of the contract owner
     constructor(address _protocol, address _owner) {
@@ -117,9 +138,49 @@ contract RugRumble is IRugRumble, ReentrancyGuard {
         dexAdapters[reversePairHash] = _dexAdapter;
     }
 
+    /// @notice Allows users to deposit tokens without a specific game ID
+    /// @param token The token to deposit
+    /// @param amount The amount to deposit
+    function deposit(address token, uint256 amount) external nonReentrant {
+        require(supportedTokens[token], "Token not supported");
+        require(amount > 0, "Amount must be greater than zero");
+        require(
+            IERC20(token).allowance(msg.sender, address(this)) >= amount,
+            "Insufficient allowance for token"
+        );
+
+        IERC20(token).transferFrom(msg.sender, address(this), amount);
+        userDeposits[msg.sender][token] += amount;
+
+        emit UserDeposited(msg.sender, token, amount);
+    }
+
+    /// @notice Allows users to withdraw their deposited tokens if not in a game
+    /// @param token The token to withdraw
+    /// @param amount The amount to withdraw
+    function withdrawDeposit(address token, uint256 amount) external nonReentrant {
+        require(userDeposits[msg.sender][token] >= amount, "Insufficient deposit");
+        
+        userDeposits[msg.sender][token] -= amount;
+        IERC20(token).transfer(msg.sender, amount);
+        
+        emit UserWithdrawn(msg.sender, token, amount);
+    }
+
     /// @inheritdoc IRugRumble
+    /// @notice Creates and starts a game between two users using their existing deposits
+    /// @param gameId The ID for the new game
+    /// @param player1 The address of the first player
+    /// @param player2 The address of the second player
+    /// @param token1 The first token for the game
+    /// @param token2 The second token for the game
+    /// @param wagerAmount1 The wager amount for the first token
+    /// @param wagerAmount2 The wager amount for the second token
+    /// @param epochId The epoch ID for the game
     function setGame(
         uint256 gameId,
+        address player1,
+        address player2,
         address token1,
         address token2,
         uint256 wagerAmount1,
@@ -134,20 +195,29 @@ contract RugRumble is IRugRumble, ReentrancyGuard {
             "Wager amounts must be greater than zero"
         );
         require(games[gameId].player1 == address(0), "Game already exists");
-
+        
+        // Check if both players have enough deposits
+        require(userDeposits[player1][token1] >= wagerAmount1, "Player1 has insufficient deposit");
+        require(userDeposits[player2][token2] >= wagerAmount2, "Player2 has insufficient deposit");
+        
+        // Create the game
         games[gameId] = Game({
-            player1: address(0),
-            player2: address(0),
+            player1: player1,
+            player2: player2,
             token1: token1,
             token2: token2,
             wagerAmount1: wagerAmount1,
             wagerAmount2: wagerAmount2,
-            isActive: false,
+            isActive: true,
             winner: address(0),
             loser: address(0),
             epochId: epochId
         });
-
+        
+        // Deduct deposits from users
+        userDeposits[player1][token1] -= wagerAmount1;
+        userDeposits[player2][token2] -= wagerAmount2;
+        
         emit GameSet(
             gameId,
             epochId,
@@ -156,63 +226,22 @@ contract RugRumble is IRugRumble, ReentrancyGuard {
             wagerAmount1,
             wagerAmount2
         );
+        
+        emit GameStarted(gameId, player1, player2, epochId);
     }
 
     /// @inheritdoc IRugRumble
-    function depositForGame(uint256 gameId, address token) external nonReentrant {
-        Game storage game = games[gameId];
-        require(!game.isActive, "Game is already active");
-
-        if (game.token1 == token && game.player1 == address(0)) {
-            require(
-                IERC20(game.token1).allowance(msg.sender, address(this)) >=
-                    game.wagerAmount1,
-                "Insufficient allowance for token1"
-            );
-            IERC20(game.token1).transferFrom(
-                msg.sender,
-                address(this),
-                game.wagerAmount1
-            );
-            game.player1 = msg.sender;
-        } else if (game.token2 == token && game.player2 == address(0)) {
-            require(
-                IERC20(game.token2).allowance(msg.sender, address(this)) >=
-                    game.wagerAmount2,
-                "Insufficient allowance for token2"
-            );
-            IERC20(game.token2).transferFrom(
-                msg.sender,
-                address(this),
-                game.wagerAmount2
-            );
-            game.player2 = msg.sender;
-        }
-
-        if (game.player1 != address(0) && game.player2 != address(0)) {
-            startGame(gameId);
-        }
-
-        emit TokenDeposited(
-            gameId,
-            msg.sender,
-            game.player1 == msg.sender ? game.token1 : game.token2,
-            game.epochId,
-            game.player1 == msg.sender ? game.wagerAmount1 : game.wagerAmount2
-        );
-    }
-
-    /// @notice Internal function to start a game once both players have deposited their tokens
-    /// @param gameId The unique ID of the game
-    function startGame(uint256 gameId) internal {
-        Game storage game = games[gameId];
-        require(
-            game.player1 != address(0) && game.player2 != address(0),
-            "Both players must be present"
-        );
-
-        game.isActive = true;
-        emit GameStarted(gameId, game.player1, game.player2, game.epochId);
+    /// @notice Refunds deposits to a specific user
+    /// @param user The address of the user to refund
+    /// @param token The token address to refund
+    /// @param amount The amount to refund
+    function refundUser(address user, address token, uint256 amount) external onlyOwner nonReentrant {
+        require(amount > 0, "Amount must be greater than zero");
+        require(IERC20(token).balanceOf(address(this)) >= amount, "Insufficient contract balance");
+        
+        IERC20(token).transfer(user, amount);
+        
+        emit UserWithdrawn(user, token, amount);
     }
 
     struct GameVars {
@@ -226,6 +255,7 @@ contract RugRumble is IRugRumble, ReentrancyGuard {
         uint256 protocolShare;
     }
 
+    /// @inheritdoc IRugRumble
     function refundGame(uint256 gameId) external onlyOwner nonReentrant {
         Game storage game = games[gameId];
         require(!game.isActive || game.winner == address(0), "Game already completed");
@@ -234,33 +264,29 @@ contract RugRumble is IRugRumble, ReentrancyGuard {
         // Refund player 1 if they deposited
         if (game.player1 != address(0)) {
             IERC20(game.token1).transfer(game.player1, game.wagerAmount1);
-            emit TokenDeposited(
-                gameId,
+            emit UserRefunded(
                 game.player1,
+                gameId,
                 game.token1,
-                game.epochId,
-                0  // Amount set to 0 to indicate refund
+                game.wagerAmount1
             );
         }
 
         // Refund player 2 if they deposited
         if (game.player2 != address(0)) {
             IERC20(game.token2).transfer(game.player2, game.wagerAmount2);
-            emit TokenDeposited(
-                gameId,
+            emit UserRefunded(
                 game.player2,
+                gameId,
                 game.token2,
-                game.epochId,
-                0  // Amount set to 0 to indicate refund
+                game.wagerAmount2
             );
         }
 
+        emit GameRefunded(gameId, game.player1, game.player2);
+
         // Reset game state
-        game.player1 = address(0);
-        game.player2 = address(0);
         game.isActive = false;
-        game.winner = address(0);
-        game.loser = address(0);
     }
 
     /// @inheritdoc IRugRumble
@@ -337,6 +363,7 @@ contract RugRumble is IRugRumble, ReentrancyGuard {
             vars.winnerToken,
             vars.loserToken
         );
+        
         emit WagerDistributed(
             gameId,
             winner,
@@ -351,6 +378,14 @@ contract RugRumble is IRugRumble, ReentrancyGuard {
     /// @inheritdoc IRugRumble
     function getGame(uint256 gameId) external view returns (Game memory) {
         return games[gameId];
+    }
+
+    /// @notice Returns the deposit amount for a user and token
+    /// @param user The user address
+    /// @param token The token address
+    /// @return The amount of tokens deposited
+    function getUserDeposit(address user, address token) external view returns (uint256) {
+        return userDeposits[user][token];
     }
 
     /// @inheritdoc IRugRumble
